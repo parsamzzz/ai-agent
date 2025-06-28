@@ -3,7 +3,7 @@ import multer from 'multer'
 import dotenv from 'dotenv'
 import cors from 'cors'
 import mime from 'mime-types'
-import { GoogleGenAI, Modality } from '@google/genai'
+import axios from 'axios'
 
 dotenv.config()
 
@@ -19,14 +19,9 @@ app.use(express.json())
 const PRIVATE_KEY = process.env.PRIVATE_API_KEY
 const API_KEYS = process.env.GEMINI_API_KEYS?.split(',').map(k => k.trim()) || []
 
-if (API_KEYS.length === 0) {
-  console.error('❌ هیچ کلید API تعریف نشده. لطفاً .env را بررسی کنید.')
-  process.exit(1)
-}
-
 let currentKeyIndex = 0
 
-app.post('/api/gemini-image', upload.single('image'), async (req, res) => {
+app.post('/api/image-to-render', upload.single('image'), async (req, res) => {
   const clientKey = req.headers['x-api-key']
   if (!clientKey || clientKey !== PRIVATE_KEY) {
     return res.status(403).json({ error: 'Unauthorized' })
@@ -51,32 +46,38 @@ app.post('/api/gemini-image', upload.single('image'), async (req, res) => {
   currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length
 
   try {
-    const ai = new GoogleGenAI({ apiKey: selectedKey })
-
-    const result = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-preview-image-generation',
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: mimeType,
-                data: base64Image
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent`,
+      {
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: base64Image
+                }
               }
-            }
-          ]
+            ]
+          }
+        ],
+        generationConfig: {
+          responseModalities: ['IMAGE']
         }
-      ],
-      config: {
-        responseModalities: [Modality.IMAGE]
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': selectedKey
+        }
       }
-    })
+    )
 
-    const imageBase64 = result?.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.data)?.inlineData?.data
+    const imageData = response.data?.candidates?.[0]?.content?.parts?.find(p => p.inline_data?.data)?.inline_data?.data
 
-    if (imageBase64) {
-      const buffer = Buffer.from(imageBase64, 'base64')
+    if (imageData) {
+      const buffer = Buffer.from(imageData, 'base64')
       res.setHeader('Content-Type', 'image/png')
       res.setHeader('Content-Disposition', 'inline; filename="render.png"')
       return res.send(buffer)
@@ -85,7 +86,7 @@ app.post('/api/gemini-image', upload.single('image'), async (req, res) => {
     return res.status(500).json({ error: 'پاسخ بدون تصویر دریافت شد.' })
 
   } catch (err) {
-    console.error(`❌ خطا از کلید ${selectedKey.slice(0, 10)}... →`, err?.message || err)
+    console.error(`❌ کلید ${selectedKey.slice(0, 10)}... شکست خورد:`, err?.message || err)
     return res.status(500).json({ error: 'خطا در تولید تصویر', detail: err?.message || err })
   }
 })
@@ -95,5 +96,5 @@ app.use((req, res) => {
 })
 
 app.listen(PORT, () => {
-  console.log(`🚀 API آماده است: http://localhost:${PORT}/api/gemini-image`)
+  console.log(`🚀 API آماده است: http://localhost:${PORT}/api/image-to-render`)
 })
